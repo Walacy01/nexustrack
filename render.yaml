@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: nexustrack-backend
+    runtime: python
+    buildCommand: echo "no build needed"
+    startCommand: python server.py 10000
+    envVars:
+      - key: PORT
+        value: 10000
+    autoDeploy: false
