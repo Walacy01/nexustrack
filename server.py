@@ -338,9 +338,10 @@ def init_db():
                 """, (str(uuid.uuid4()), wid, idx, cspan, now_str))
 
         # Inserir dados de exemplo para demonstração inicial se a tabela orders estiver vazia
-        cur.execute("SELECT COUNT(*) FROM orders")
-        if cur.fetchone()[0] == 0:
-            insert_demo_seed_data(cur)
+        # (Desativado para manter apenas contas e dados reais)
+        # cur.execute("SELECT COUNT(*) FROM orders")
+        # if cur.fetchone()[0] == 0:
+        #     insert_demo_seed_data(cur)
 
         conn.commit()
         conn.close()
@@ -974,6 +975,9 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
         elif path == "/api/user/preferences":
             self.handle_save_preference(body)
             return
+        elif path == "/api/data/clean-demo":
+            self.handle_clean_demo_data()
+            return
 
         # Rota 404
         self.send_json({"error": "Endpoint não encontrado para POST", "path": path}, 404)
@@ -988,6 +992,23 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
         # Desconectar Meta (Revoga permissões DELETE /me/permissions e limpa banco)
         if path == "/api/meta/disconnect":
             self.handle_meta_disconnect()
+            return
+        elif path.startswith("/api/meta/accounts/"):
+            acc_id = path.replace("/api/meta/accounts/", "")
+            with db_lock:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM facebook_ad_accounts WHERE id = ?", (acc_id,))
+                cur.execute("DELETE FROM campaigns WHERE account_id = ?", (acc_id,))
+                cur.execute("DELETE FROM ad_sets WHERE account_id = ?", (acc_id,))
+                cur.execute("DELETE FROM ads WHERE account_id = ?", (acc_id,))
+                cur.execute("DELETE FROM meta_campaign_insights WHERE account_id = ?", (acc_id,))
+                conn.commit()
+                conn.close()
+            self.send_json({"status": "success", "message": f"Conta {acc_id} removida com sucesso!"})
+            return
+        elif path == "/api/data/clean-demo":
+            self.handle_clean_demo_data()
             return
         elif path.startswith("/api/meta/pixels/"):
             pix_id = path.replace("/api/meta/pixels/", "")
@@ -1011,6 +1032,25 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json({"error": "Endpoint não encontrado para DELETE"}, 404)
+
+    def handle_clean_demo_data(self):
+        """Remove todos os dados fictícios demo do banco de dados permanentemente."""
+        with db_lock:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            # Remove conta demo e IDs que não sejam as contas autorizadas
+            cur.execute("DELETE FROM facebook_ad_accounts WHERE id = 'act_9876543210' OR id = 'act_61596001977641'")
+            cur.execute("DELETE FROM campaigns WHERE id LIKE 'cmp_%' OR account_id = 'act_9876543210' OR account_id = 'act_61596001977641'")
+            cur.execute("DELETE FROM ad_sets WHERE id LIKE 'adset_%' OR account_id = 'act_9876543210' OR account_id = 'act_61596001977641'")
+            cur.execute("DELETE FROM ads WHERE id LIKE 'ad_%' OR account_id = 'act_9876543210' OR account_id = 'act_61596001977641'")
+            cur.execute("DELETE FROM meta_campaign_insights WHERE id LIKE 'ins_%' OR account_id = 'act_9876543210' OR account_id = 'act_61596001977641'")
+            cur.execute("DELETE FROM orders WHERE id LIKE 'ord_10%' OR order_id LIKE 'KW-8472%' OR order_id LIKE 'HP-1928%' OR order_id LIKE 'GR-5521%' OR order_id LIKE 'CK-9912%' OR order_id LIKE 'WP-3341%'")
+            cur.execute("DELETE FROM tracking_events WHERE id LIKE 'ev_0%'")
+            # Garante que as contas reais fiquem selecionadas
+            cur.execute("UPDATE facebook_ad_accounts SET is_selected = 1 WHERE id IN ('act_1670255660603213', 'act_2118282965442535')")
+            conn.commit()
+            conn.close()
+        self.send_json({"status": "success", "message": "Dados fictícios removidos com sucesso!"})
 
     # ==========================================
     # HANDLERS: OAUTH 2.0 & CONEXÃO META
@@ -1665,8 +1705,6 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
         """, (s_date[:10], e_date[:10]))
         clicks_row = cur.fetchone()
         clicks = int(clicks_row["total_clicks"]) if clicks_row else 0
-        if clicks == 0:
-            clicks = 1250 # Fallback representativo para visualização clara do funil
 
         # 2. VIS. PÁGINA (PageViews)
         cur.execute("""
@@ -1674,8 +1712,6 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
             WHERE event_name = 'PageView' AND created_at >= ? AND created_at <= ?
         """, (s_date, e_date))
         pageviews = cur.fetchone()[0]
-        if pageviews == 0:
-            pageviews = int(clicks * 0.88) # Connect Rate típico de 88%
 
         # 3. ICS (Initiate Checkout)
         cur.execute("""
@@ -1683,8 +1719,6 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
             WHERE event_name = 'InitiateCheckout' AND created_at >= ? AND created_at <= ?
         """, (s_date, e_date))
         ic_count = cur.fetchone()[0]
-        if ic_count == 0:
-            ic_count = int(pageviews * 0.12) # Taxa típica de 12%
 
         # 4. VENDAS INICIADAS (Aprovadas + Pendentes)
         cur.execute("""
@@ -1692,8 +1726,6 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
             WHERE created_at >= ? AND created_at <= ?
         """, (s_date, e_date))
         sales_initiated = cur.fetchone()[0]
-        if sales_initiated == 0:
-            sales_initiated = int(ic_count * 0.65)
 
         # 5. VENDAS APROVADAS
         cur.execute("""
@@ -1701,8 +1733,6 @@ class NexusTrackHTTPHandler(BaseHTTPRequestHandler):
             WHERE status = 'approved' AND created_at >= ? AND created_at <= ?
         """, (s_date, e_date))
         sales_approved = cur.fetchone()[0]
-        if sales_approved == 0:
-            sales_approved = int(sales_initiated * 0.75)
 
         conn.close()
 
